@@ -24,27 +24,24 @@ jobs:
       - name: Build Docker image
         id: docker_build
         run: |
-          # Build the Docker image using the provided Dockerfile
           docker build -t linux-kernel-builder -f Dockerfile .
-          echo "::set-output name=image::linux-kernel-builder"
+          echo "image=linux-kernel-builder" >> "$GITHUB_OUTPUT"
 
       - name: Set up kernel version
         id: set_kernel_version
         run: |
           if [ -n "${{ github.event.inputs.kernel_version }}" ]; then
             echo "Using specified kernel version: ${{ github.event.inputs.kernel_version }}"
-            echo "kernel_version=${{ github.event.inputs.kernel_version }}" >> $GITHUB_OUTPUT
+            echo "kernel_version=${{ github.event.inputs.kernel_version }}" >> "$GITHUB_OUTPUT"
           else
             KERNEL_VER=$(head -n 1 kernel_versions.txt)
             echo "Using kernel version from kernel_versions.txt: $KERNEL_VER"
-            echo "kernel_version=$KERNEL_VER" >> $GITHUB_OUTPUT
+            echo "kernel_version=$KERNEL_VER" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run build script inside Docker container
         id: run_docker_build
         run: |
-          # Create a directory for builds inside the container's workspace
-          # This ensures outputs are kept consistent.
           mkdir -p /tmp/workspace/builds
 
           docker run \
@@ -52,22 +49,19 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -v /tmp/workspace/builds:/workspace/builds \
             --workdir /workspace \
-            --env KERNEL_TO_BUILD=${{ steps.set_kernel_version.outputs.kernel_version }} \
-            ${{ steps.docker_build.outputs.image }} \
-            bash ./build.sh $KERNEL_TO_BUILD # Pass the version as an argument to build.sh
+            ${{ steps.docker_build.outputs.image }}
 
-          # Check if vmlinux.bin was created in the builds directory
           if [ ! -f "/tmp/workspace/builds/vmlinux-${{ steps.set_kernel_version.outputs.kernel_version }}/vmlinux.bin" ]; then
             echo "Kernel build failed: vmlinux.bin not found in builds directory."
             exit 1
           fi
-          echo "::set-output name=build_success::true"
+          echo "build_success=true" >> "$GITHUB_OUTPUT"
 
       - name: Download kernel binary from container's build output
         if: steps.run_docker_build.outputs.build_success == 'true'
         run: |
           KERNEL_VER=${{ steps.set_kernel_version.outputs.kernel_version }}
-          mkdir -p ./kernel_output # Create a local directory to store the output
+          mkdir -p ./kernel_output
           cp /tmp/workspace/builds/vmlinux-${KERNEL_VER}/vmlinux.bin ./kernel_output/vmlinux-kernel-${KERNEL_VER}.bin
 
       - name: Create GitHub Release
