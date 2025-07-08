@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for get_tag
 
@@ -39,53 +39,45 @@ jobs:
             echo "kernel_version=$KERNEL_VER" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Create artifacts directory
+        run: mkdir -p ${{ github.workspace }}/artifacts
+
       - name: Run build script inside Docker container
         id: run_docker_build
         run: |
-          mkdir -p /tmp/workspace/builds
-
+          # The artifacts directory is mapped from the host to the container's /workspace/builds
           docker run \
             --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -v /tmp/workspace/builds:/workspace/builds \
+            -v ${{ github.workspace }}/artifacts:/workspace/builds \
             --workdir /workspace \
             ${{ steps.docker_build.outputs.image }}
 
-          if [ ! -f "/tmp/workspace/builds/vmlinux-${{ steps.set_kernel_version.outputs.kernel_version }}/vmlinux.bin" ]; then
-            echo "Kernel build failed: vmlinux.bin not found in builds directory."
+          # Check if the build artifact was created correctly inside the mapped directory
+          KERNEL_VER=${{ steps.set_kernel_version.outputs.kernel_version }}
+          if [ ! -f "${{ github.workspace }}/artifacts/vmlinux-${KERNEL_VER}/vmlinux.bin" ]; then
+            echo "Kernel build failed: vmlinux.bin not found in artifacts directory."
             exit 1
           fi
+
+          # Rename the final artifact for easier release uploading
+          mv ${{ github.workspace }}/artifacts/vmlinux-${KERNEL_VER}/vmlinux.bin ${{ github.workspace }}/artifacts/vmlinux-kernel-${KERNEL_VER}.bin
           echo "build_success=true" >> "$GITHUB_OUTPUT"
 
-      - name: Download kernel binary from container's build output
+      # This single step replaces both 'create-release' and 'upload-release-asset'
+      - name: Create GitHub Release and Upload Asset
         if: steps.run_docker_build.outputs.build_success == 'true'
-        run: |
-          KERNEL_VER=${{ steps.set_kernel_version.outputs.kernel_version }}
-          mkdir -p ./kernel_output
-          cp /tmp/workspace/builds/vmlinux-${KERNEL_VER}/vmlinux.bin ./kernel_output/vmlinux-kernel-${KERNEL_VER}.bin
-
-      - name: Create GitHub Release
-        if: steps.run_docker_build.outputs.build_success == 'true'
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
+          # The GITHUB_TOKEN is automatically provided by GitHub
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: "kernel-${{ steps.set_kernel_version.outputs.kernel_version }}"
-          release_name: "Linux Kernel ${{ steps.set_kernel_version.outputs.kernel_version }}"
+          name: "Linux Kernel ${{ steps.set_kernel_version.outputs.kernel_version }}"
           body: |
             Linux kernel built for version ${{ steps.set_kernel_version.outputs.kernel_version }}.
             Built by GitHub Actions using Docker.
           draft: false
           prerelease: false
-
-      - name: Upload release asset
-        if: steps.run_docker_build.outputs.build_success == 'true'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./kernel_output/vmlinux-kernel-${{ steps.set_kernel_version.outputs.kernel_version }}.bin
-          asset_name: vmlinux-kernel-${{ steps.set_kernel_version.outputs.kernel_version }}.bin
-          asset_content_type: application/octet-stream
+          # Point to the build artifact(s) to upload.
+          # You can use wildcards (*) to upload multiple files.
+          files: |
+            ${{ github.workspace }}/artifacts/vmlinux-kernel-*.bin
