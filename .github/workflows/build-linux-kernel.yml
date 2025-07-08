@@ -45,30 +45,30 @@ jobs:
       - name: Run build script inside Docker container
         id: run_docker_build
         run: |
-          # The artifacts directory is mapped from the host to the container's /workspace/builds
+          # Run the container with the current host user's ID and GID to avoid permission issues.
           docker run \
             --rm \
+            --user "$(id -u):$(id -g)" \
             -v ${{ github.workspace }}/artifacts:/workspace/builds \
             --workdir /workspace \
             ${{ steps.docker_build.outputs.image }}
 
-          # Check if the build artifact was created correctly inside the mapped directory
           KERNEL_VER=${{ steps.set_kernel_version.outputs.kernel_version }}
-          if [ ! -f "${{ github.workspace }}/artifacts/vmlinux-${KERNEL_VER}/vmlinux.bin" ]; then
+          ARTIFACT_DIR="${{ github.workspace }}/artifacts"
+
+          if [ ! -f "${ARTIFACT_DIR}/vmlinux-${KERNEL_VER}/vmlinux.bin" ]; then
             echo "Kernel build failed: vmlinux.bin not found in artifacts directory."
             exit 1
           fi
 
           # Rename the final artifact for easier release uploading
-          mv ${{ github.workspace }}/artifacts/vmlinux-${KERNEL_VER}/vmlinux.bin ${{ github.workspace }}/artifacts/vmlinux-kernel-${KERNEL_VER}.bin
+          mv "${ARTIFACT_DIR}/vmlinux-${KERNEL_VER}/vmlinux.bin" "${ARTIFACT_DIR}/vmlinux-kernel-${KERNEL_VER}.bin"
           echo "build_success=true" >> "$GITHUB_OUTPUT"
 
-      # This single step replaces both 'create-release' and 'upload-release-asset'
       - name: Create GitHub Release and Upload Asset
         if: steps.run_docker_build.outputs.build_success == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          # The GITHUB_TOKEN is automatically provided by GitHub
           token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: "kernel-${{ steps.set_kernel_version.outputs.kernel_version }}"
           name: "Linux Kernel ${{ steps.set_kernel_version.outputs.kernel_version }}"
@@ -77,7 +77,5 @@ jobs:
             Built by GitHub Actions using Docker.
           draft: false
           prerelease: false
-          # Point to the build artifact(s) to upload.
-          # You can use wildcards (*) to upload multiple files.
           files: |
             ${{ github.workspace }}/artifacts/vmlinux-kernel-*.bin
