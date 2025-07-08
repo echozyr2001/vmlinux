@@ -19,7 +19,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetch all history for get_tag
+          fetch-depth: 0
 
       - name: Build Docker image
         id: docker_build
@@ -45,14 +45,18 @@ jobs:
       - name: Run build script inside Docker container
         id: run_docker_build
         run: |
-          # Run the container with the current host user's ID and GID to avoid permission issues.
+          # Step 1: Run the container as default root user to allow 'apt-get' etc. to succeed.
           docker run \
             --rm \
-            --user "$(id -u):$(id -g)" \
             -v ${{ github.workspace }}/artifacts:/workspace/builds \
             --workdir /workspace \
             ${{ steps.docker_build.outputs.image }}
 
+          # Step 2: After the container exits, files in 'artifacts' are owned by root.
+          # Use sudo on the HOST to change ownership back to the current 'runner' user.
+          sudo chown -R $(id -u):$(id -g) ${{ github.workspace }}/artifacts
+
+          # Step 3: Now that the runner user owns the files, subsequent steps will succeed.
           KERNEL_VER=${{ steps.set_kernel_version.outputs.kernel_version }}
           ARTIFACT_DIR="${{ github.workspace }}/artifacts"
 
@@ -61,7 +65,7 @@ jobs:
             exit 1
           fi
 
-          # Rename the final artifact for easier release uploading
+          # Rename the final artifact. This will now work.
           mv "${ARTIFACT_DIR}/vmlinux-${KERNEL_VER}/vmlinux.bin" "${ARTIFACT_DIR}/vmlinux-kernel-${KERNEL_VER}.bin"
           echo "build_success=true" >> "$GITHUB_OUTPUT"
 
